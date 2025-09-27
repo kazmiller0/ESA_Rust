@@ -5,6 +5,7 @@ use ark_poly::{univariate::DensePolynomial, UVPolynomial};
 use core::ops::Deref;
 use rayon::{self, prelude::*};
 use std::borrow::Cow;
+use std::ops::Neg;
 
 #[derive(Debug, Clone, Default)]
 pub struct DigestSet<F: PrimeField> {
@@ -29,7 +30,10 @@ impl<F: PrimeField> DigestSet<F> {
         let mut inputs = Vec::new();
         for (k, v) in &self.inner {
             for _ in 0..*v {
-                inputs.push(DensePolynomial::from_coefficients_vec(vec![*k, F::one()]));
+                inputs.push(DensePolynomial::from_coefficients_vec(vec![
+                    k.neg(),
+                    F::one(),
+                ]));
             }
         }
 
@@ -73,12 +77,24 @@ mod tests {
             ],
         };
         let expect = DensePolynomial::from_coefficients_vec(vec![
-            Fr::from(6u32),
-            Fr::from(17u32),
-            Fr::from(17u32),
-            Fr::from(7u32),
+            Fr::from(6u32).neg(),
+            Fr::from(1u32),
+            Fr::from(1u32).neg(),
+            Fr::from(1u32).neg(),
             Fr::from(1u32),
         ]);
-        assert_eq!(set.expand_to_poly(), expect);
+        let poly = set.expand_to_poly();
+        // (X-1)^2 * (X-2) * (X-3)
+        // (X^2-2X+1) * (X^2-5X+6)
+        // X^4 - 5X^3 + 6X^2 - 2X^3 + 10X^2 - 12X + X^2 - 5X + 6
+        // X^4 - 7X^3 + 17X^2 - 17X + 6
+        let expected_poly = DensePolynomial::from_coefficients_vec(vec![
+            Fr::from(6u32),
+            Fr::from(17u32).neg(),
+            Fr::from(17u32),
+            Fr::from(7u32).neg(),
+            Fr::from(1u32),
+        ]);
+        assert_eq!(poly, expected_poly);
     }
 }

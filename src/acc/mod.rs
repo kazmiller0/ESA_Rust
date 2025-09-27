@@ -215,7 +215,7 @@ impl Accumulator for Acc1 {
         let x = set
             .par_iter()
             .map(|(v, exp)| {
-                let s = *PRI_S + v;
+                let s = *PRI_S - v;
                 let exp = [*exp as u64];
                 s.pow(&exp)
             })
@@ -230,7 +230,7 @@ impl Accumulator for Acc1 {
         let x = set
             .par_iter()
             .map(|(v, exp)| {
-                let s = *PRI_S + v;
+                let s = *PRI_S - v;
                 let exp = [*exp as u64];
                 s.pow(&exp)
             })

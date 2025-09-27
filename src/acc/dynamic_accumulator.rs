@@ -10,6 +10,53 @@ use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
 use ark_ff::{Field, One, PrimeField, Zero};
 use ark_poly::{univariate::DensePolynomial, Polynomial, UVPolynomial};
 use std::collections::HashMap;
+use std::ops::Neg;
+
+/// A proof that an 'add' operation was performed correctly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddProof {
+    pub old_acc_value: G1Affine,
+    pub new_acc_value: G1Affine,
+    pub element: Fr,
+}
+
+impl AddProof {
+    /// Verifies that the new accumulator is the result of adding the element to the old one.
+    /// It checks if e(new_acc, g2) == e(old_acc, g2^(s-element)).
+    pub fn verify(&self) -> bool {
+        // Calculate g2^(s-element)
+        let s_minus_elem: Fr = *super::PRI_S - self.element;
+        let g2_s_minus_elem = super::G2_POWER.apply(&s_minus_elem);
+
+        let lhs = Curve::pairing(self.new_acc_value, G2Affine::prime_subgroup_generator());
+        let rhs = Curve::pairing(self.old_acc_value, g2_s_minus_elem);
+
+        lhs == rhs
+    }
+}
+
+/// A proof that a 'delete' operation was performed correctly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteProof {
+    pub old_acc_value: G1Affine,
+    pub new_acc_value: G1Affine,
+    pub element: Fr,
+}
+
+impl DeleteProof {
+    /// Verifies that the new accumulator is the result of deleting the element from the old one.
+    /// It checks if e(new_acc, g2^(s-element)) == e(old_acc, g2).
+    pub fn verify(&self) -> bool {
+        // Calculate g2^(s-element)
+        let s_minus_elem: Fr = *super::PRI_S - self.element;
+        let g2_s_minus_elem = super::G2_POWER.apply(&s_minus_elem);
+
+        let lhs = Curve::pairing(self.new_acc_value, g2_s_minus_elem);
+        let rhs = Curve::pairing(self.old_acc_value, G2Affine::prime_subgroup_generator());
+
+        lhs == rhs
+    }
+}
 
 /// A proof of membership for an element in the accumulator.
 /// The witness is an accumulator of the set without the element.
@@ -21,13 +68,13 @@ pub struct MembershipProof {
 
 impl MembershipProof {
     /// Verifies that this proof is valid for the given accumulator value.
-    /// It checks if e(witness, g2^(s+element)) == e(accumulator, g2).
+    /// It checks if e(witness, g2^(s-element)) == e(accumulator, g2).
     pub fn verify(&self, accumulator: G1Affine) -> bool {
-        // Calculate g2^(s+element)
-        let s_plus_elem: Fr = *super::PRI_S + self.element;
-        let g2_s_plus_elem = super::G2_POWER.apply(&s_plus_elem);
+        // Calculate g2^(s-element)
+        let s_minus_elem: Fr = *super::PRI_S - self.element;
+        let g2_s_minus_elem = super::G2_POWER.apply(&s_minus_elem);
 
-        let lhs = Curve::pairing(self.witness, g2_s_plus_elem);
+        let lhs = Curve::pairing(self.witness, g2_s_minus_elem);
         let rhs = Curve::pairing(accumulator, G2Affine::prime_subgroup_generator());
 
         lhs == rhs
@@ -76,53 +123,62 @@ impl DynamicAccumulator {
         }
     }
 
-    /// Adds a new element to the accumulator.
+    /// Adds a new element to the accumulator and returns a proof of the operation.
     /// If the element already exists, its count is incremented.
-    /// The accumulator value is updated by scalar multiplying it with (s+element).
-    pub fn add(&mut self, element: &i64) {
+    /// The accumulator value is updated by scalar multiplying it with (s-element).
+    pub fn add(&mut self, element: &i64) -> AddProof {
         let fr_element = digest_to_prime_field(&element.to_digest());
+        let old_acc = self.acc_value;
 
-        // Update accumulator value: acc' = acc^(s+element)
-        let s_plus_elem: Fr = *super::PRI_S + fr_element;
+        // Update accumulator value: acc' = acc^(s-element)
+        let s_minus_elem: Fr = *super::PRI_S - fr_element;
         self.acc_value = self
             .acc_value
             .into_projective()
-            .mul(s_plus_elem.into_repr())
+            .mul(s_minus_elem.into_repr())
             .into_affine();
 
         // Update the element set
         *self.elements.entry(fr_element).or_insert(0) += 1;
+
+        AddProof {
+            old_acc_value: old_acc,
+            new_acc_value: self.acc_value,
+            element: fr_element,
+        }
     }
 
     /// Updates an element in the accumulator from an old value to a new one.
     /// This is implemented as a delete operation followed by an add operation.
+    /// Returns proofs for both operations.
     /// Returns an error if the old element is not in the accumulator.
-    pub fn update(&mut self, old_element: &i64, new_element: &i64) -> Result<()> {
-        self.delete(old_element)?;
-        self.add(new_element);
-        Ok(())
+    pub fn update(&mut self, old_element: &i64, new_element: &i64) -> Result<(DeleteProof, AddProof)> {
+        let delete_proof = self.delete(old_element)?;
+        let add_proof = self.add(new_element);
+        Ok((delete_proof, add_proof))
     }
 
-    /// Deletes an element from the accumulator.
+    /// Deletes an element from the accumulator and returns a proof of the operation.
     /// If the element exists, its count is decremented. If the count reaches zero, it's removed.
-    /// The accumulator value is updated by scalar multiplying it with the inverse of (s+element).
+    /// The accumulator value is updated by scalar multiplying it with the inverse of (s-element).
     /// Returns an error if the element is not in the accumulator.
-    pub fn delete(&mut self, element: &i64) -> Result<()> {
+    pub fn delete(&mut self, element: &i64) -> Result<DeleteProof> {
         let fr_element = digest_to_prime_field(&element.to_digest());
+        let old_acc = self.acc_value;
 
         if !self.elements.contains_key(&fr_element) {
             return Err(anyhow!("Element not in accumulator"));
         }
 
-        // Update accumulator value: acc' = acc^((s+element)^-1)
-        let s_plus_elem: Fr = *super::PRI_S + fr_element;
-        let s_plus_elem_inv = s_plus_elem
+        // Update accumulator value: acc' = acc^((s-element)^-1)
+        let s_minus_elem: Fr = *super::PRI_S - fr_element;
+        let s_minus_elem_inv = s_minus_elem
             .inverse()
             .ok_or_else(|| anyhow!("Failed to compute inverse"))?;
         self.acc_value = self
             .acc_value
             .into_projective()
-            .mul(s_plus_elem_inv.into_repr())
+            .mul(s_minus_elem_inv.into_repr())
             .into_affine();
 
         // Update the element set
@@ -132,7 +188,11 @@ impl DynamicAccumulator {
             self.elements.remove(&fr_element);
         }
 
-        Ok(())
+        Ok(DeleteProof {
+            old_acc_value: old_acc,
+            new_acc_value: self.acc_value,
+            element: fr_element,
+        })
     }
 
     /// Generates a membership proof for a given element.
@@ -147,15 +207,15 @@ impl DynamicAccumulator {
             ));
         }
 
-        // Calculate witness: acc^((s+element)^-1)
-        let s_plus_elem: Fr = *super::PRI_S + fr_element;
-        let s_plus_elem_inv = s_plus_elem
+        // Calculate witness: acc^((s-element)^-1)
+        let s_minus_elem: Fr = *super::PRI_S - fr_element;
+        let s_minus_elem_inv = s_minus_elem
             .inverse()
             .ok_or_else(|| anyhow!("Failed to compute inverse"))?;
         let witness = self
             .acc_value
             .into_projective()
-            .mul(s_plus_elem_inv.into_repr())
+            .mul(s_minus_elem_inv.into_repr())
             .into_affine();
 
         Ok(MembershipProof {
@@ -180,25 +240,25 @@ impl DynamicAccumulator {
             ));
         }
 
-        // To prove x is not in E, we show that gcd(P(X), X+x) = 1, where P(X) = product(X+e_i).
-        // Using XGCD, we find polynomials A(X), B(X) such that A(X)*(X+x) + B(X)*P(X) = 1.
+        // To prove x is not in E, we show that gcd(P(X), X-x) = 1, where P(X) = product(X-e_i).
+        // Using XGCD, we find polynomials A(X), B(X) such that A(X)*(X-x) + B(X)*P(X) = 1.
         // The proof is (g1^A(s), g2^B(s)).
-        // Verification checks e(Acc, g2^B(s)) * e(g1^A(s), g2^(s+x)) == e(g1, g2).
-        // This corresponds to e(g1^P(s), g2^B(s)) * e(g1^A(s), g2^(s+x)) == e(g1, g2)
-        // which is B(s)*P(s) + A(s)*(s+x) = 1.
+        // Verification checks e(Acc, g2^B(s)) * e(g1^A(s), g2^(s-x)) == e(g1, g2)
+        // This corresponds to e(g1^P(s), g2^B(s)) * e(g1^A(s), g2^(s-x)) == e(g1, g2)
+        // which is B(s)*P(s) + A(s)*(s-x) = 1.
 
-        // 1. Construct the accumulator polynomial P(X) = product(X+e_i).
+        // 1. Construct the accumulator polynomial P(X) = product(X-e_i).
         let mut p_poly = DensePolynomial::from_coefficients_vec(vec![Fr::one()]);
         for (elem, count) in &self.elements {
-            // X + e
-            let e_poly = DensePolynomial::from_coefficients_vec(vec![*elem, Fr::one()]);
+            // X - e
+            let e_poly = DensePolynomial::from_coefficients_vec(vec![elem.neg(), Fr::one()]);
             for _ in 0..*count {
                 p_poly = &p_poly * &e_poly;
             }
         }
 
-        // 2. Construct the polynomial for the non-member, Q(X) = X+x.
-        let q_poly = DensePolynomial::from_coefficients_vec(vec![fr_element, Fr::one()]); // X+x
+        // 2. Construct the polynomial for the non-member, Q(X) = X-x.
+        let q_poly = DensePolynomial::from_coefficients_vec(vec![fr_element.neg(), Fr::one()]); // X-x
 
         // 3. Run XGCD on Q(X) and P(X) to find A(X) and B(X).
         // We want A(X)*Q(X) + B(X)*P(X) = 1
@@ -244,19 +304,19 @@ impl DynamicAccumulator {
 
     /// Verifies a non-membership proof against the current accumulator value.
     pub fn verify_non_membership(&self, proof: &NonMembershipProof) -> bool {
-        // Verification equation: e(Acc, witness) * e(g1_a, g2^(s+x)) == e(g1, g2)
+        // Verification equation: e(Acc, witness) * e(g1_a, g2^(s-x)) == e(g1, g2)
         // Here, witness = g2^B(s) and g1_a = g1^A(s).
-        // So, e(g1^P(s), g2^B(s)) * e(g1^A(s), g2^(s+x)) == e(g1, g2)
-        // which simplifies to e(g1,g2)^(B(s)*P(s) + A(s)*(s+x)) == e(g1,g2)^1
-        // This holds if B(s)*P(s) + A(s)*(s+x) = 1.
+        // So, e(g1^P(s), g2^B(s)) * e(g1^A(s), g2^(s-x)) == e(g1, g2)
+        // which simplifies to e(g1,g2)^(B(s)*P(s) + A(s)*(s-x)) == e(g1,g2)^1
+        // This holds if B(s)*P(s) + A(s)*(s-x) = 1.
 
-        // 1. Calculate g2^(s+x)
-        let s_plus_x = *super::PRI_S + proof.element;
-        let g2_s_plus_x = super::G2_POWER.apply(&s_plus_x);
+        // 1. Calculate g2^(s-x)
+        let s_minus_x = *super::PRI_S - proof.element;
+        let g2_s_minus_x = super::G2_POWER.apply(&s_minus_x);
 
         // 2. Calculate the pairings
         let lhs1 = Curve::pairing(self.acc_value, proof.witness);
-        let lhs2 = Curve::pairing(proof.g1_a, g2_s_plus_x);
+        let lhs2 = Curve::pairing(proof.g1_a, g2_s_minus_x);
         let rhs = Curve::pairing(
             G1Affine::prime_subgroup_generator(),
             G2Affine::prime_subgroup_generator(),
@@ -302,9 +362,14 @@ mod tests {
     fn test_dynamic_accumulator_add() {
         init_logger();
         let mut dyn_acc = DynamicAccumulator::new();
-        dyn_acc.add(&1i64);
-        dyn_acc.add(&2i64);
-        dyn_acc.add(&1i64); // Add 1 again
+        let add_proof1 = dyn_acc.add(&1i64);
+        let add_proof2 = dyn_acc.add(&2i64);
+        let add_proof3 = dyn_acc.add(&1i64); // Add 1 again
+
+        // Verify proofs
+        assert!(add_proof1.verify());
+        assert!(add_proof2.verify());
+        assert!(add_proof3.verify());
 
         let set = MultiSet::from_vec(vec![1i64, 1, 2]);
         let static_acc = Acc1::cal_acc_g1_sk(&set);
@@ -333,7 +398,9 @@ mod tests {
         dyn_acc.add(&1i64);
 
         // Delete one instance of 1
-        dyn_acc.delete(&1i64).unwrap();
+        let delete_proof1 = dyn_acc.delete(&1i64).unwrap();
+        assert!(delete_proof1.verify());
+
         let set1 = MultiSet::from_vec(vec![1i64, 2]);
         let static_acc1 = Acc1::cal_acc_g1_sk(&set1);
         assert_eq!(dyn_acc.acc_value, static_acc1);
@@ -345,7 +412,9 @@ mod tests {
         );
 
         // Delete the other instance of 1
-        dyn_acc.delete(&1i64).unwrap();
+        let delete_proof2 = dyn_acc.delete(&1i64).unwrap();
+        assert!(delete_proof2.verify());
+
         let set2 = MultiSet::from_vec(vec![2i64]);
         let static_acc2 = Acc1::cal_acc_g1_sk(&set2);
         assert_eq!(dyn_acc.acc_value, static_acc2);
@@ -417,7 +486,9 @@ mod tests {
         dyn_acc.add(&200);
 
         // 1. Test successful update
-        dyn_acc.update(&100, &150).unwrap();
+        let (delete_proof, add_proof) = dyn_acc.update(&100, &150).unwrap();
+        assert!(delete_proof.verify());
+        assert!(add_proof.verify());
 
         // Verify 100 is gone
         match dyn_acc.query(&100) {

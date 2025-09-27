@@ -44,6 +44,25 @@ fn bench_delete(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_update(c: &mut Criterion) {
+    let mut group = c.benchmark_group("DynamicAccumulator: Update");
+
+    for size in [10, 100, 1000, 5000].iter() {
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+            let acc = setup_accumulator(size as u64);
+            let old_element = (size / 2) as i64;
+            let new_element = (size + 1) as i64;
+            b.iter(|| {
+                let mut acc_clone = acc.clone();
+                acc_clone
+                    .update(black_box(&old_element), black_box(&new_element))
+                    .unwrap();
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_prove_membership(c: &mut Criterion) {
     let mut group = c.benchmark_group("DynamicAccumulator: Prove Membership");
 
@@ -80,6 +99,7 @@ criterion_group!(
     benches,
     bench_add,
     bench_delete,
+    bench_update,
     bench_prove_membership,
     bench_prove_non_membership
 );
