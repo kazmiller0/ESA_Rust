@@ -5,6 +5,7 @@ use ark_poly::{univariate::DensePolynomial, UVPolynomial};
 use core::ops::Deref;
 use rayon::{self, prelude::*};
 use std::borrow::Cow;
+#[allow(unused_imports)]
 use std::ops::Neg;
 
 #[derive(Debug, Clone, Default)]
