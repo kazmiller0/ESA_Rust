@@ -1,6 +1,6 @@
 //! Benchmarks for the dynamic accumulator operations.
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use vchain::acc::dynamic_accumulator::DynamicAccumulator;
+use esa_rust::acc::dynamic_accumulator::DynamicAccumulator;
 
 fn setup_accumulator(size: u64) -> DynamicAccumulator {
     let mut acc = DynamicAccumulator::new();

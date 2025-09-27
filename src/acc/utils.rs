@@ -5,7 +5,7 @@ use ark_poly::{
     univariate::{DenseOrSparsePolynomial, DensePolynomial},
     UVPolynomial,
 };
-use itertools::unfold;
+use std::iter;
 
 pub fn try_digest_to_prime_field<F: PrimeField>(input: &Digest) -> Option<F> {
     let mut num = F::from_be_bytes_mod_order(&input.0).into_repr();
@@ -70,10 +70,13 @@ impl<G: ProjectiveCurve> FixedBaseCurvePow<G> {
             } else {
                 lookup_size
             };
-            let sub_table: Vec<G> = unfold(multiplier, |last| {
-                let ret = *last;
-                last.add_assign(&multiplier);
-                Some(ret)
+            let sub_table: Vec<G> = iter::from_fn({
+                let mut current = multiplier;
+                move || {
+                    let ret = current;
+                    current.add_assign(&multiplier);
+                    Some(ret)
+                }
             })
             .take(table_size)
             .collect();
@@ -127,10 +130,13 @@ impl<F: PrimeField> FixedBaseScalarPow<F> {
             } else {
                 lookup_size
             };
-            let sub_table: Vec<F> = unfold(multiplier, |last| {
-                let ret = *last;
-                last.mul_assign(&multiplier);
-                Some(ret)
+            let sub_table: Vec<F> = iter::from_fn({
+                let mut current = multiplier;
+                move || {
+                    let ret = current;
+                    current.mul_assign(&multiplier);
+                    Some(ret)
+                }
             })
             .take(table_size)
             .collect();

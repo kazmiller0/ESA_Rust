@@ -1,4 +1,4 @@
-use vchain::acc::dynamic_accumulator::DynamicAccumulator;
+use esa_rust::acc::dynamic_accumulator::DynamicAccumulator;
 
 fn main() {
     // 初始化一个空的动态累加器

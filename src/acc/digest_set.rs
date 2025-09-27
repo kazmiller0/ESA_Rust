@@ -76,7 +76,7 @@ mod tests {
                 (Fr::from(3u32), 1),
             ],
         };
-        let expect = DensePolynomial::from_coefficients_vec(vec![
+        let _expect = DensePolynomial::from_coefficients_vec(vec![
             Fr::from(6u32).neg(),
             Fr::from(1u32),
             Fr::from(1u32).neg(),

@@ -1,4 +1,4 @@
-use vchain::acc::dynamic_accumulator::{DynamicAccumulator, QueryResult};
+use esa_rust::acc::dynamic_accumulator::{DynamicAccumulator, QueryResult};
 
 fn main() {
     // 1. 创建一个新的动态累加器

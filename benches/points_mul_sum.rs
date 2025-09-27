@@ -1,10 +1,10 @@
 use ark_ec::{msm::VariableBaseMSM, AffineCurve, ProjectiveCurve};
 use ark_ff::{PrimeField, UniformRand, Zero};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use esa_rust::acc::utils::*;
+use esa_rust::acc::{Fr, G1Projective as G1};
 use rand::SeedableRng;
 use rayon::prelude::*;
-use vchain::acc::utils::*;
-use vchain::acc::{Fr, G1Projective as G1};
 
 fn naive<G: AffineCurve>(
     bases: &[G],

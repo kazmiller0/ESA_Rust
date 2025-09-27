@@ -3,8 +3,8 @@ use ark_ff::{Field, PrimeField};
 use core::ops::MulAssign;
 use core::str::FromStr;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use vchain::acc::utils::*;
-use vchain::acc::{Fr, G1Projective as G1, G2Projective as G2};
+use esa_rust::acc::utils::*;
+use esa_rust::acc::{Fr, G1Projective as G1, G2Projective as G2};
 
 pub fn bench_pow_g1(c: &mut Criterion) {
     let mut group = c.benchmark_group("pow_g1");
