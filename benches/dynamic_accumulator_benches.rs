@@ -5,7 +5,7 @@ use esa_rust::acc::dynamic_accumulator::DynamicAccumulator;
 fn setup_accumulator(size: u64) -> DynamicAccumulator {
     let mut acc = DynamicAccumulator::new();
     for i in 0..size {
-        acc.add(&(i as i64));
+        let _ = acc.add(&(i as i64));
     }
     acc
 }
@@ -15,13 +15,13 @@ fn bench_add(c: &mut Criterion) {
 
     for size in [10, 100, 1000, 5000].iter() {
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            let mut acc = setup_accumulator(size as u64);
+            let acc = setup_accumulator(size as u64);
             let new_element = (size + 1) as i64;
             b.iter(|| {
                 // We clone the accumulator for each iteration to avoid timing the setup
                 // and to ensure each 'add' is independent.
                 let mut acc_clone = acc.clone();
-                acc_clone.add(black_box(&new_element));
+                let _ = acc_clone.add(black_box(&new_element));
             });
         });
     }

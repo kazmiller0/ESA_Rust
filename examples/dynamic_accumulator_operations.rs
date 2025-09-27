@@ -8,14 +8,14 @@ fn main() {
 
     // 2. 添加元素并验证证明
     println!("向累加器中添加 100...");
-    let add_proof_100 = acc.add(&100);
+    let add_proof_100 = acc.add(&100).unwrap();
     println!("添加完成，正在验证操作证明...");
     assert!(add_proof_100.verify());
     println!("证明有效！");
     println!("当前累加器值: {:?}\n", acc.acc_value);
 
     println!("向累加器中添加 200...");
-    let add_proof_200 = acc.add(&200);
+    let add_proof_200 = acc.add(&200).unwrap();
     println!("添加完成，正在验证操作证明...");
     assert!(add_proof_200.verify());
     println!("证明有效！");

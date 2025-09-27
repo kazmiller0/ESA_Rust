@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
 use ark_ff::{Field, One, PrimeField, Zero};
 use ark_poly::{univariate::DensePolynomial, Polynomial, UVPolynomial};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ops::Neg;
 
 /// A proof that an 'add' operation was performed correctly.
@@ -107,8 +107,8 @@ pub enum QueryResult {
 pub struct DynamicAccumulator {
     /// The current accumulator value, g1^P(s).
     pub acc_value: G1Affine,
-    /// The set of elements (as field elements) and their counts.
-    elements: HashMap<Fr, u32>,
+    /// The set of elements (as field elements).
+    elements: HashSet<Fr>,
 }
 
 impl DynamicAccumulator {
@@ -119,15 +119,18 @@ impl DynamicAccumulator {
             acc_value: G1Projective::from(G1Affine::prime_subgroup_generator())
                 .mul(Fr::one().into_repr())
                 .into_affine(),
-            elements: HashMap::new(),
+            elements: HashSet::new(),
         }
     }
 
     /// Adds a new element to the accumulator and returns a proof of the operation.
-    /// If the element already exists, its count is incremented.
+    /// If the element already exists, it returns an error.
     /// The accumulator value is updated by scalar multiplying it with (s-element).
-    pub fn add(&mut self, element: &i64) -> AddProof {
+    pub fn add(&mut self, element: &i64) -> Result<AddProof> {
         let fr_element = digest_to_prime_field(&element.to_digest());
+        if self.elements.contains(&fr_element) {
+            return Err(anyhow!("Element already in accumulator"));
+        }
         let old_acc = self.acc_value;
 
         // Update accumulator value: acc' = acc^(s-element)
@@ -139,13 +142,13 @@ impl DynamicAccumulator {
             .into_affine();
 
         // Update the element set
-        *self.elements.entry(fr_element).or_insert(0) += 1;
+        self.elements.insert(fr_element);
 
-        AddProof {
+        Ok(AddProof {
             old_acc_value: old_acc,
             new_acc_value: self.acc_value,
             element: fr_element,
-        }
+        })
     }
 
     /// Updates an element in the accumulator from an old value to a new one.
@@ -154,7 +157,7 @@ impl DynamicAccumulator {
     /// Returns an error if the old element is not in the accumulator.
     pub fn update(&mut self, old_element: &i64, new_element: &i64) -> Result<(DeleteProof, AddProof)> {
         let delete_proof = self.delete(old_element)?;
-        let add_proof = self.add(new_element);
+        let add_proof = self.add(new_element)?;
         Ok((delete_proof, add_proof))
     }
 
@@ -166,7 +169,7 @@ impl DynamicAccumulator {
         let fr_element = digest_to_prime_field(&element.to_digest());
         let old_acc = self.acc_value;
 
-        if !self.elements.contains_key(&fr_element) {
+        if !self.elements.contains(&fr_element) {
             return Err(anyhow!("Element not in accumulator"));
         }
 
@@ -182,11 +185,7 @@ impl DynamicAccumulator {
             .into_affine();
 
         // Update the element set
-        let count = self.elements.get_mut(&fr_element).unwrap();
-        *count -= 1;
-        if *count == 0 {
-            self.elements.remove(&fr_element);
-        }
+        self.elements.remove(&fr_element);
 
         Ok(DeleteProof {
             old_acc_value: old_acc,
@@ -201,7 +200,7 @@ impl DynamicAccumulator {
     pub fn prove_membership(&self, element: &i64) -> Result<MembershipProof> {
         let fr_element = digest_to_prime_field(&element.to_digest());
 
-        if !self.elements.contains_key(&fr_element) {
+        if !self.elements.contains(&fr_element) {
             return Err(anyhow!(
                 "Cannot prove membership for an element not in the set"
             ));
@@ -234,7 +233,7 @@ impl DynamicAccumulator {
     pub fn prove_non_membership(&self, element: &i64) -> Result<NonMembershipProof> {
         let fr_element = digest_to_prime_field(&element.to_digest());
 
-        if self.elements.contains_key(&fr_element) {
+        if self.elements.contains(&fr_element) {
             return Err(anyhow!(
                 "Cannot prove non-membership for an element in the set"
             ));
@@ -249,12 +248,10 @@ impl DynamicAccumulator {
 
         // 1. Construct the accumulator polynomial P(X) = product(X-e_i).
         let mut p_poly = DensePolynomial::from_coefficients_vec(vec![Fr::one()]);
-        for (elem, count) in &self.elements {
+        for elem in &self.elements {
             // X - e
             let e_poly = DensePolynomial::from_coefficients_vec(vec![elem.neg(), Fr::one()]);
-            for _ in 0..*count {
-                p_poly = &p_poly * &e_poly;
-            }
+            p_poly = &p_poly * &e_poly;
         }
 
         // 2. Construct the polynomial for the non-member, Q(X) = X-x.
@@ -329,7 +326,7 @@ impl DynamicAccumulator {
     /// of either membership or non-membership.
     pub fn query(&self, element: &i64) -> QueryResult {
         let fr_element = digest_to_prime_field(&element.to_digest());
-        if self.elements.contains_key(&fr_element) {
+        if self.elements.contains(&fr_element) {
             // This unwrap is safe because we've just checked for the element's existence.
             let proof = self.prove_membership(element).unwrap();
             QueryResult::Membership(proof)
@@ -362,67 +359,59 @@ mod tests {
     fn test_dynamic_accumulator_add() {
         init_logger();
         let mut dyn_acc = DynamicAccumulator::new();
-        let add_proof1 = dyn_acc.add(&1i64);
-        let add_proof2 = dyn_acc.add(&2i64);
-        let add_proof3 = dyn_acc.add(&1i64); // Add 1 again
+        let add_proof1 = dyn_acc.add(&1i64).unwrap();
+        let add_proof2 = dyn_acc.add(&2i64).unwrap();
+        let add_proof3_res = dyn_acc.add(&1i64); // Add 1 again
 
         // Verify proofs
         assert!(add_proof1.verify());
         assert!(add_proof2.verify());
-        assert!(add_proof3.verify());
+        assert!(add_proof3_res.is_err()); // Should fail to add duplicate
 
-        let set = MultiSet::from_vec(vec![1i64, 1, 2]);
+        let set = MultiSet::from_vec(vec![1i64, 2]);
         let static_acc = Acc1::cal_acc_g1_sk(&set);
 
         assert_eq!(dyn_acc.acc_value, static_acc);
-        assert_eq!(
-            dyn_acc
-                .elements
-                .get(&digest_to_prime_field(&1i64.to_digest())),
-            Some(&2)
-        );
-        assert_eq!(
-            dyn_acc
-                .elements
-                .get(&digest_to_prime_field(&2i64.to_digest())),
-            Some(&1)
-        );
+        assert_eq!(dyn_acc.elements.len(), 2);
+        assert!(dyn_acc
+            .elements
+            .contains(&digest_to_prime_field(&1i64.to_digest())));
+        assert!(dyn_acc
+            .elements
+            .contains(&digest_to_prime_field(&2i64.to_digest())));
     }
 
     #[test]
     fn test_dynamic_accumulator_delete() {
         init_logger();
         let mut dyn_acc = DynamicAccumulator::new();
-        dyn_acc.add(&1i64);
-        dyn_acc.add(&2i64);
-        dyn_acc.add(&1i64);
+        dyn_acc.add(&1i64).unwrap();
+        dyn_acc.add(&2i64).unwrap();
 
-        // Delete one instance of 1
+        // Delete 1
         let delete_proof1 = dyn_acc.delete(&1i64).unwrap();
         assert!(delete_proof1.verify());
 
-        let set1 = MultiSet::from_vec(vec![1i64, 2]);
+        let set1 = MultiSet::from_vec(vec![2i64]);
         let static_acc1 = Acc1::cal_acc_g1_sk(&set1);
         assert_eq!(dyn_acc.acc_value, static_acc1);
-        assert_eq!(
-            dyn_acc
-                .elements
-                .get(&digest_to_prime_field(&1i64.to_digest())),
-            Some(&1)
-        );
-
-        // Delete the other instance of 1
-        let delete_proof2 = dyn_acc.delete(&1i64).unwrap();
-        assert!(delete_proof2.verify());
-
-        let set2 = MultiSet::from_vec(vec![2i64]);
-        let static_acc2 = Acc1::cal_acc_g1_sk(&set2);
-        assert_eq!(dyn_acc.acc_value, static_acc2);
         assert!(!dyn_acc
             .elements
-            .contains_key(&digest_to_prime_field(&1i64.to_digest())));
+            .contains(&digest_to_prime_field(&1i64.to_digest())));
 
-        // Try to delete an element that is not there
+        // Try to delete 1 again (should fail)
+        assert!(dyn_acc.delete(&1i64).is_err());
+
+        // Delete 2
+        let delete_proof2 = dyn_acc.delete(&2i64).unwrap();
+        assert!(delete_proof2.verify());
+
+        let set2: MultiSet<i64> = MultiSet::from_vec(vec![]);
+        let static_acc2 = Acc1::cal_acc_g1_sk(&set2);
+        assert_eq!(dyn_acc.acc_value, static_acc2);
+        assert!(dyn_acc.elements.is_empty());
+
+        // Try to delete an element that was never there
         assert!(dyn_acc.delete(&3i64).is_err());
     }
 
@@ -430,9 +419,9 @@ mod tests {
     fn test_membership_proof() {
         init_logger();
         let mut dyn_acc = DynamicAccumulator::new();
-        dyn_acc.add(&100);
-        dyn_acc.add(&200);
-        dyn_acc.add(&300);
+        dyn_acc.add(&100).unwrap();
+        dyn_acc.add(&200).unwrap();
+        dyn_acc.add(&300).unwrap();
 
         // 1. Prove and verify 200
         let proof = dyn_acc.prove_membership(&200).unwrap();
@@ -457,8 +446,8 @@ mod tests {
     fn test_non_membership_proof() {
         init_logger();
         let mut dyn_acc = DynamicAccumulator::new();
-        dyn_acc.add(&100);
-        dyn_acc.add(&200);
+        dyn_acc.add(&100).unwrap();
+        dyn_acc.add(&200).unwrap();
 
         // 1. Prove and verify non-membership for 300
         let proof = dyn_acc.prove_non_membership(&300).unwrap();
@@ -482,8 +471,8 @@ mod tests {
     fn test_update_and_query() {
         init_logger();
         let mut dyn_acc = DynamicAccumulator::new();
-        dyn_acc.add(&100);
-        dyn_acc.add(&200);
+        dyn_acc.add(&100).unwrap();
+        dyn_acc.add(&200).unwrap();
 
         // 1. Test successful update
         let (delete_proof, add_proof) = dyn_acc.update(&100, &150).unwrap();
