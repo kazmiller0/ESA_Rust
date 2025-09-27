@@ -13,6 +13,10 @@ harness = false
 name = "points_mul_sum"
 harness = false
 
+[[bench]]
+name = "dynamic_accumulator_benches"
+harness = false
+
 [dependencies]
 anyhow = "1.0"
 ark-bls12-381 = "0.2"
@@ -35,6 +39,6 @@ smallvec = { version = "1.6", features = ["serde"] }
 [dev-dependencies]
 actix-rt = "1.1"
 criterion = "0.3"
-env_logger = "0.8"
+env_logger = "0.9"
 rand = "0.7"
 serde_json = "1.0"
