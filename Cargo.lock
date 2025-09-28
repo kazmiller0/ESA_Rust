@@ -605,6 +605,7 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "ark-poly",
+ "ark-serialize",
  "async-trait",
  "bincode",
  "blake2b_simd",
@@ -619,6 +620,7 @@ dependencies = [
  "rand",
  "rayon",
  "serde",
+ "serde_bytes",
  "serde_json",
  "smallvec",
 ]
@@ -1401,6 +1403,16 @@ checksum = "80ece43fc6fbed4eb5392ab50c07334d3e577cbf40997ee896fe7af40bba4245"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
