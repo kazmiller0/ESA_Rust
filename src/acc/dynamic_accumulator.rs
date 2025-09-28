@@ -99,10 +99,14 @@ pub struct NonMembershipProof {
 /// where P1, P2 are the polynomials of the two original sets, and P_intersect is the intersection polynomial.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntersectionProof {
-    /// g2^A(s), witness for the first Bézout coefficient
+    /// g2^Q1(s), witness for the first quotient polynomial
     pub witness_a: G2Affine,
-    /// g2^B(s), witness for the second Bézout coefficient
+    /// g2^Q2(s), witness for the second quotient polynomial
     pub witness_b: G2Affine,
+    /// g1^A(s), witness for coprimality of Q1 from A(X)Q1(X) + B(X)Q2(X) = 1
+    pub witness_coprime_a: G1Affine,
+    /// g1^B(s), witness for coprimality of Q2 from A(X)Q1(X) + B(X)Q2(X) = 1
+    pub witness_coprime_b: G1Affine,
 }
 
 /// Represents the result of a query against the accumulator.
@@ -438,7 +442,7 @@ impl DynamicAccumulator {
         let q1_s = q1_poly.evaluate(&*super::PRI_S);
         let q2_s = q2_poly.evaluate(&*super::PRI_S);
 
-        // 6. Compute the witnesses: g2^Q1(s) and g2^Q2(s)
+        // 6. Compute the witnesses for quotients: g2^Q1(s) and g2^Q2(s)
         let witness_a = G2Projective::prime_subgroup_generator()
             .mul(q1_s.into_repr())
             .into_affine();
@@ -446,12 +450,44 @@ impl DynamicAccumulator {
             .mul(q2_s.into_repr())
             .into_affine();
 
-        let proof = IntersectionProof {
-            witness_a,
-            witness_b,
-        };
+        // 7. Prove that Q1(X) and Q2(X) are coprime using XGCD
+        // We find A(X), B(X) such that A(X)Q1(X) + B(X)Q2(X) = 1
+        if let Some((gcd, a_poly, b_poly)) = xgcd(q1_poly, q2_poly) {
+            if !gcd.is_zero() && gcd.degree() == 0 {
+                let gcd_val = gcd.coeffs.get(0).cloned().unwrap_or_else(Fr::one);
+                let gcd_inv = gcd_val
+                    .inverse()
+                    .ok_or_else(|| anyhow!("Failed to compute gcd inverse for coprimality proof"))?;
+                
+                let a_poly_norm = DensePolynomial::from_coefficients_vec(
+                    a_poly.coeffs.iter().map(|c| *c * gcd_inv).collect(),
+                );
+                let b_poly_norm = DensePolynomial::from_coefficients_vec(
+                    b_poly.coeffs.iter().map(|c| *c * gcd_inv).collect(),
+                );
 
-        Ok((intersection_acc, proof))
+                let a_s = a_poly_norm.evaluate(&*super::PRI_S);
+                let b_s = b_poly_norm.evaluate(&*super::PRI_S);
+
+                let witness_coprime_a = G1Projective::prime_subgroup_generator()
+                    .mul(a_s.into_repr())
+                    .into_affine();
+                let witness_coprime_b = G1Projective::prime_subgroup_generator()
+                    .mul(b_s.into_repr())
+                    .into_affine();
+                
+                let proof = IntersectionProof {
+                    witness_a,
+                    witness_b,
+                    witness_coprime_a,
+                    witness_coprime_b,
+                };
+        
+                return Ok((intersection_acc, proof));
+            }
+        }
+        
+        Err(anyhow!("Failed to create intersection proof, quotients might not be coprime"))
     }
 
     /// Computes the intersection and also returns the intersection elements (as Fr values).
@@ -471,8 +507,12 @@ impl DynamicAccumulator {
     /// The verification checks that:
     /// - acc1_value = witness_a * intersection_value (in the exponent)
     /// - acc2_value = witness_b * intersection_value (in the exponent)
+    /// - Q1 and Q2 are coprime, verified via A(s)Q1(s) + B(s)Q2(s) = 1
     /// 
-    /// Using pairing: e(acc1, g2) == e(intersection, witness_a) and e(acc2, g2) == e(intersection, witness_b)
+    /// Using pairing: 
+    /// - e(acc1, g2) == e(intersection, witness_a) 
+    /// - e(acc2, g2) == e(intersection, witness_b)
+    /// - e(witness_coprime_a, witness_a) * e(witness_coprime_b, witness_b) == e(g1, g2)
     pub fn verify_intersection(
         acc1_value: G1Affine,
         acc2_value: G1Affine,
@@ -489,7 +529,16 @@ impl DynamicAccumulator {
         let lhs2 = Curve::pairing(acc2_value, G2Affine::prime_subgroup_generator());
         let rhs2 = Curve::pairing(intersection_value, proof.witness_b);
 
-        lhs1 == rhs1 && lhs2 == rhs2
+        // Verification equation 3: e(g1^A(s), g2^Q1(s)) * e(g1^B(s), g2^Q2(s)) == e(g1, g2)
+        // This verifies that A(s)Q1(s) + B(s)Q2(s) = 1, proving Q1 and Q2 are coprime.
+        let coprimality_lhs1 = Curve::pairing(proof.witness_coprime_a, proof.witness_a);
+        let coprimality_lhs2 = Curve::pairing(proof.witness_coprime_b, proof.witness_b);
+        let coprimality_rhs = Curve::pairing(
+            G1Affine::prime_subgroup_generator(),
+            G2Affine::prime_subgroup_generator(),
+        );
+
+        lhs1 == rhs1 && lhs2 == rhs2 && (coprimality_lhs1 * coprimality_lhs2 == coprimality_rhs)
     }
 
     /// One-shot API: compute intersection, return query result on it, the proof, the accumulator, and elements.

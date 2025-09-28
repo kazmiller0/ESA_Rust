@@ -1,7 +1,7 @@
 [package]
 name = "esa_rust"
 version = "0.1.0"
-authors = ["Cheng XU <rust@xuc.me>"]
+authors = ["kazmiller0@icloud"]
 edition = "2021"
 license = "MIT"
 description = "A Rust implementation of efficient set accumulators with dynamic operations"
