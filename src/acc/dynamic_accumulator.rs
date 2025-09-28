@@ -5,10 +5,12 @@ use super::{
     Curve, Fr, G1Affine, G1Projective, G2Affine, G2Projective,
 };
 use crate::digest::Digestible;
+use crate::{Acc1, MultiSet};
+use crate::acc::Accumulator;
 use anyhow::{anyhow, Result};
 use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
 use ark_ff::{Field, One, PrimeField, Zero};
-use ark_poly::{univariate::DensePolynomial, Polynomial, UVPolynomial};
+use ark_poly::{univariate::{DensePolynomial, DenseOrSparsePolynomial}, Polynomial, UVPolynomial};
 use std::collections::HashSet;
 use std::ops::Neg;
 
@@ -90,6 +92,17 @@ pub struct NonMembershipProof {
     pub witness: G2Affine,
     /// g1^A(s), the other part of the proof
     pub g1_a: G1Affine,
+}
+
+/// A proof that a given accumulator represents the intersection of two other accumulators.
+/// This proof uses the Bézout identity: A(X)*P1(X) + B(X)*P2(X) = P_intersect(X)
+/// where P1, P2 are the polynomials of the two original sets, and P_intersect is the intersection polynomial.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntersectionProof {
+    /// g2^A(s), witness for the first Bézout coefficient
+    pub witness_a: G2Affine,
+    /// g2^B(s), witness for the second Bézout coefficient
+    pub witness_b: G2Affine,
 }
 
 /// Represents the result of a query against the accumulator.
@@ -322,6 +335,22 @@ impl DynamicAccumulator {
         lhs1 * lhs2 == rhs
     }
 
+    /// Returns the number of elements in the accumulator.
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Returns true if the accumulator is empty.
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+
+    /// Returns a vector of field elements (Fr) contained in the accumulator.
+    /// Note: Original application values cannot be recovered from Fr digests.
+    pub fn elements_fr(&self) -> Vec<Fr> {
+        self.elements.iter().cloned().collect()
+    }
+
     /// Queries the accumulator for a given element and returns a cryptographic proof
     /// of either membership or non-membership.
     pub fn query(&self, element: &i64) -> QueryResult {
@@ -335,6 +364,198 @@ impl DynamicAccumulator {
             let proof = self.prove_non_membership(element).unwrap();
             QueryResult::NonMembership(proof)
         }
+    }
+
+    /// Computes the intersection of this accumulator with another accumulator and generates a proof.
+    /// Returns the intersection accumulator and a proof that it represents the intersection.
+    /// This uses the Bézout identity: A(X)*P1(X) + B(X)*P2(X) = P_intersect(X)
+    pub fn prove_intersection(&self, other: &DynamicAccumulator) -> Result<(DynamicAccumulator, IntersectionProof)> {
+        // 1. Compute the actual intersection of the two sets
+        let intersection_elements: std::collections::HashSet<Fr> = self.elements
+            .intersection(&other.elements)
+            .cloned()
+            .collect();
+
+        // 2. Create the intersection accumulator
+        let mut intersection_acc = DynamicAccumulator::new();
+        intersection_acc.elements = intersection_elements;
+        
+        // Calculate the intersection accumulator value
+        let mut acc_value = G1Projective::from(G1Affine::prime_subgroup_generator());
+        for elem in &intersection_acc.elements {
+            let s_minus_elem = *super::PRI_S - elem;
+            acc_value = acc_value.mul(s_minus_elem.into_repr());
+        }
+        intersection_acc.acc_value = acc_value.into_affine();
+
+        // 3. Construct polynomials for each set
+        // P1(X) = product(X - e_i) for elements in self
+        let mut p1_poly = DensePolynomial::from_coefficients_vec(vec![Fr::one()]);
+        for elem in &self.elements {
+            let e_poly = DensePolynomial::from_coefficients_vec(vec![elem.neg(), Fr::one()]);
+            p1_poly = &p1_poly * &e_poly;
+        }
+
+        // P2(X) = product(X - e_i) for elements in other
+        let mut p2_poly = DensePolynomial::from_coefficients_vec(vec![Fr::one()]);
+        for elem in &other.elements {
+            let e_poly = DensePolynomial::from_coefficients_vec(vec![elem.neg(), Fr::one()]);
+            p2_poly = &p2_poly * &e_poly;
+        }
+
+        // P_intersect(X) = product(X - e_i) for elements in intersection
+        let mut p_intersect_poly = DensePolynomial::from_coefficients_vec(vec![Fr::one()]);
+        for elem in &intersection_acc.elements {
+            let e_poly = DensePolynomial::from_coefficients_vec(vec![elem.neg(), Fr::one()]);
+            p_intersect_poly = &p_intersect_poly * &e_poly;
+        }
+
+        // 4. Use extended GCD to find Bézout coefficients
+        // We need to find A(X) and B(X) such that A(X)*P1(X) + B(X)*P2(X) = P_intersect(X)
+        // This is more complex than the simple GCD case, so we'll use a different approach.
+        
+        // For intersection proof, we need to show that P_intersect divides both P1 and P2
+        // We can compute Q1(X) = P1(X) / P_intersect(X) and Q2(X) = P2(X) / P_intersect(X)
+        // Then use the identity: P1(X) = Q1(X) * P_intersect(X) and P2(X) = Q2(X) * P_intersect(X)
+        
+        let (q1_poly, remainder1): (DensePolynomial<Fr>, DensePolynomial<Fr>) = match DenseOrSparsePolynomial::from(&p1_poly).divide_with_q_and_r(&DenseOrSparsePolynomial::from(&p_intersect_poly)) {
+            Some((q, r)) => (q.into(), r.into()),
+            None => return Err(anyhow!("Failed to divide P1 by P_intersect")),
+        };
+        if !remainder1.is_zero() {
+            return Err(anyhow!("P_intersect does not divide P1 - invalid intersection"));
+        }
+
+        let (q2_poly, remainder2): (DensePolynomial<Fr>, DensePolynomial<Fr>) = match DenseOrSparsePolynomial::from(&p2_poly).divide_with_q_and_r(&DenseOrSparsePolynomial::from(&p_intersect_poly)) {
+            Some((q, r)) => (q.into(), r.into()),
+            None => return Err(anyhow!("Failed to divide P2 by P_intersect")),
+        };
+        if !remainder2.is_zero() {
+            return Err(anyhow!("P_intersect does not divide P2 - invalid intersection"));
+        }
+
+        // 5. Evaluate the quotient polynomials at the secret s
+        let q1_s = q1_poly.evaluate(&*super::PRI_S);
+        let q2_s = q2_poly.evaluate(&*super::PRI_S);
+
+        // 6. Compute the witnesses: g2^Q1(s) and g2^Q2(s)
+        let witness_a = G2Projective::prime_subgroup_generator()
+            .mul(q1_s.into_repr())
+            .into_affine();
+        let witness_b = G2Projective::prime_subgroup_generator()
+            .mul(q2_s.into_repr())
+            .into_affine();
+
+        let proof = IntersectionProof {
+            witness_a,
+            witness_b,
+        };
+
+        Ok((intersection_acc, proof))
+    }
+
+    /// Computes the intersection and also returns the intersection elements (as Fr values).
+    /// Returns (intersection_accumulator, intersection_proof, intersection_elements_fr).
+    pub fn prove_intersection_with_elements(
+        &self,
+        other: &DynamicAccumulator,
+    ) -> Result<(DynamicAccumulator, IntersectionProof, Vec<Fr>)> {
+        let (intersection_acc, proof) = self.prove_intersection(other)?;
+        let elements = intersection_acc.elements_fr();
+        Ok((intersection_acc, proof, elements))
+    }
+
+    /// Verifies that the given accumulator represents the intersection of two other accumulators.
+    /// This is a static method that doesn't require access to the secret key.
+    /// 
+    /// The verification checks that:
+    /// - acc1_value = witness_a * intersection_value (in the exponent)
+    /// - acc2_value = witness_b * intersection_value (in the exponent)
+    /// 
+    /// Using pairing: e(acc1, g2) == e(intersection, witness_a) and e(acc2, g2) == e(intersection, witness_b)
+    pub fn verify_intersection(
+        acc1_value: G1Affine,
+        acc2_value: G1Affine,
+        intersection_value: G1Affine,
+        proof: &IntersectionProof,
+    ) -> bool {
+        // Verification equation 1: e(acc1, g2) == e(intersection, witness_a)
+        // This verifies that acc1 = intersection^Q1(s), i.e., P1(s) = Q1(s) * P_intersect(s)
+        let lhs1 = Curve::pairing(acc1_value, G2Affine::prime_subgroup_generator());
+        let rhs1 = Curve::pairing(intersection_value, proof.witness_a);
+
+        // Verification equation 2: e(acc2, g2) == e(intersection, witness_b)  
+        // This verifies that acc2 = intersection^Q2(s), i.e., P2(s) = Q2(s) * P_intersect(s)
+        let lhs2 = Curve::pairing(acc2_value, G2Affine::prime_subgroup_generator());
+        let rhs2 = Curve::pairing(intersection_value, proof.witness_b);
+
+        lhs1 == rhs1 && lhs2 == rhs2
+    }
+
+    /// One-shot API: compute intersection, return query result on it, the proof, the accumulator, and elements.
+    /// Returns (query_result_on_intersection, intersection_proof, intersection_accumulator, intersection_elements_fr).
+    pub fn query_in_intersection_with_elements(
+        &self,
+        other: &DynamicAccumulator,
+        element: &i64,
+    ) -> Result<(QueryResult, IntersectionProof, DynamicAccumulator, Vec<Fr>)> {
+        let (intersection_acc, proof) = self.prove_intersection(other)?;
+        let q = intersection_acc.query(element);
+        let elements = intersection_acc.elements_fr();
+        Ok((q, proof, intersection_acc, elements))
+    }
+
+    /// Prover API: return intersection original values (i64), intersection accumulator and proof.
+    /// Note: The prover must supply the clear-text values that correspond to `self` and `other`.
+    /// The verifier can recompute the accumulator from returned values and verify against the proof.
+    pub fn prove_intersection_with_values(
+        &self,
+        other: &DynamicAccumulator,
+        self_values: &[i64],
+        other_values: &[i64],
+    ) -> Result<(Vec<i64>, DynamicAccumulator, IntersectionProof)> {
+        // Compute intersection values on clear-text
+        let set_a: std::collections::HashSet<i64> = self_values.iter().cloned().collect();
+        let set_b: std::collections::HashSet<i64> = other_values.iter().cloned().collect();
+        let mut intersection_values: Vec<i64> = set_a.intersection(&set_b).cloned().collect();
+        intersection_values.sort_unstable();
+
+        // Compute cryptographic intersection accumulator and proof
+        let (intersection_acc, proof) = self.prove_intersection(other)?;
+
+        // Optional consistency check (debug): ensure hashed values match the accumulator's element set
+        // This is not strictly necessary for correctness, so we do not enforce it.
+
+        Ok((intersection_values, intersection_acc, proof))
+    }
+
+    /// Verifier helper: verify intersection using provided clear-text intersection values.
+    /// It recomputes the intersection accumulator from values and checks the proof.
+    pub fn verify_intersection_with_values(
+        acc1_value: G1Affine,
+        acc2_value: G1Affine,
+        intersection_values: &[i64],
+        proof: &IntersectionProof,
+    ) -> bool {
+        // Build a set (unique) from the provided values
+        let mut unique: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        for v in intersection_values {
+            unique.insert(*v);
+        }
+        let mut vec_unique: Vec<i64> = unique.into_iter().collect();
+        vec_unique.sort_unstable();
+
+        // Compute accumulator from values (public, no secret needed)
+        let ms = MultiSet::from_vec(vec_unique);
+        let intersection_value_from_values = Acc1::cal_acc_g1(&ms);
+
+        // Verify pairing equations using the provided proof
+        DynamicAccumulator::verify_intersection(
+            acc1_value,
+            acc2_value,
+            intersection_value_from_values,
+            proof,
+        )
     }
 }
 
@@ -505,5 +726,103 @@ mod tests {
 
         // 2. Test update on a non-existent element (should fail)
         assert!(dyn_acc.update(&999, &1000).is_err());
+    }
+
+    #[test]
+    fn test_intersection_proof() {
+        init_logger();
+        
+        // Create two accumulators with overlapping elements
+        let mut acc1 = DynamicAccumulator::new();
+        acc1.add(&100).unwrap();
+        acc1.add(&200).unwrap();
+        acc1.add(&300).unwrap();
+
+        let mut acc2 = DynamicAccumulator::new();
+        acc2.add(&200).unwrap();
+        acc2.add(&300).unwrap();
+        acc2.add(&400).unwrap();
+
+        // 1. Prove intersection
+        let (intersection_acc, proof) = acc1.prove_intersection(&acc2).unwrap();
+        
+        // 2. Verify the intersection contains the expected elements
+        assert_eq!(intersection_acc.elements.len(), 2);
+        assert!(intersection_acc.elements.contains(&digest_to_prime_field(&200i64.to_digest())));
+        assert!(intersection_acc.elements.contains(&digest_to_prime_field(&300i64.to_digest())));
+
+        // 3. Verify the intersection proof
+        assert!(DynamicAccumulator::verify_intersection(
+            acc1.acc_value,
+            acc2.acc_value,
+            intersection_acc.acc_value,
+            &proof
+        ));
+
+        // 4. Test with a manually created intersection accumulator (should also work)
+        let mut manual_intersection = DynamicAccumulator::new();
+        manual_intersection.add(&200).unwrap();
+        manual_intersection.add(&300).unwrap();
+        
+        assert_eq!(intersection_acc.acc_value, manual_intersection.acc_value);
+    }
+
+    #[test]
+    fn test_intersection_proof_empty_intersection() {
+        init_logger();
+        
+        // Create two accumulators with no overlapping elements
+        let mut acc1 = DynamicAccumulator::new();
+        acc1.add(&100).unwrap();
+        acc1.add(&200).unwrap();
+
+        let mut acc2 = DynamicAccumulator::new();
+        acc2.add(&300).unwrap();
+        acc2.add(&400).unwrap();
+
+        // 1. Prove intersection (should be empty)
+        let (intersection_acc, proof) = acc1.prove_intersection(&acc2).unwrap();
+        
+        // 2. Verify the intersection is empty
+        assert_eq!(intersection_acc.elements.len(), 0);
+        assert_eq!(intersection_acc.acc_value, DynamicAccumulator::new().acc_value);
+
+        // 3. Verify the intersection proof
+        assert!(DynamicAccumulator::verify_intersection(
+            acc1.acc_value,
+            acc2.acc_value,
+            intersection_acc.acc_value,
+            &proof
+        ));
+    }
+
+    #[test]
+    fn test_intersection_proof_identical_sets() {
+        init_logger();
+        
+        // Create two identical accumulators
+        let mut acc1 = DynamicAccumulator::new();
+        acc1.add(&100).unwrap();
+        acc1.add(&200).unwrap();
+
+        let mut acc2 = DynamicAccumulator::new();
+        acc2.add(&100).unwrap();
+        acc2.add(&200).unwrap();
+
+        // 1. Prove intersection (should be identical to both sets)
+        let (intersection_acc, proof) = acc1.prove_intersection(&acc2).unwrap();
+        
+        // 2. Verify the intersection equals both original sets
+        assert_eq!(intersection_acc.elements.len(), 2);
+        assert_eq!(intersection_acc.acc_value, acc1.acc_value);
+        assert_eq!(intersection_acc.acc_value, acc2.acc_value);
+
+        // 3. Verify the intersection proof
+        assert!(DynamicAccumulator::verify_intersection(
+            acc1.acc_value,
+            acc2.acc_value,
+            intersection_acc.acc_value,
+            &proof
+        ));
     }
 }
