@@ -1,14 +1,8 @@
 [package]
 name = "esa_rust"
 version = "0.1.0"
-authors = ["kazmiller0@icloud"]
 edition = "2021"
-license = "MIT"
-description = "A Rust implementation of efficient set accumulators with dynamic operations"
-repository = "https://github.com/your-username/ESA_Rust"
-keywords = ["accumulator", "cryptography", "set", "zero-knowledge"]
-categories = ["cryptography", "data-structures"]
-publish = false
+
 
 [[bench]]
 name = "fixed_base_pow"

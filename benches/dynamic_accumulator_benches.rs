@@ -1,106 +1,212 @@
-//! Benchmarks for the dynamic accumulator operations.
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use esa_rust::acc::dynamic_accumulator::DynamicAccumulator;
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use esa_rust::acc::dynamic_accumulator::{DynamicAccumulator, QueryResult};
+use rand::Rng;
 
-fn setup_accumulator(size: u64) -> DynamicAccumulator {
+fn setup_accumulator(size: usize) -> DynamicAccumulator {
     let mut acc = DynamicAccumulator::new();
-    for i in 0..size {
-        let _ = acc.add(&(i as i64));
-    }
+    let elements: Vec<i64> = (0..size as i64).collect();
+    acc.add_batch(&elements).unwrap();
     acc
 }
 
 fn bench_add(c: &mut Criterion) {
-    let mut group = c.benchmark_group("DynamicAccumulator: Add");
-
-    for size in [10, 100, 1000, 5000].iter() {
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            let acc = setup_accumulator(size as u64);
-            let new_element = (size + 1) as i64;
-            b.iter(|| {
-                // We clone the accumulator for each iteration to avoid timing the setup
-                // and to ensure each 'add' is independent.
-                let mut acc_clone = acc.clone();
-                let _ = acc_clone.add(black_box(&new_element));
-            });
+    let mut group = c.benchmark_group("Dynamic Accumulator Add");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(BenchmarkId::new("add", size), size, |b, &size| {
+            b.iter_with_setup(
+                || {
+                    let acc = setup_accumulator(size);
+                    let new_element = rand::thread_rng().gen::<i64>();
+                    (acc, new_element)
+                },
+                |(mut acc, new_element)| acc.add(&new_element),
+            );
         });
     }
     group.finish();
 }
 
 fn bench_delete(c: &mut Criterion) {
-    let mut group = c.benchmark_group("DynamicAccumulator: Delete");
-
-    for size in [10, 100, 1000, 5000].iter() {
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            let acc = setup_accumulator(size as u64);
-            let element_to_delete = (size / 2) as i64;
-            b.iter(|| {
-                let mut acc_clone = acc.clone();
-                acc_clone.delete(black_box(&element_to_delete)).unwrap();
-            });
-        });
-    }
-    group.finish();
-}
-
-fn bench_update(c: &mut Criterion) {
-    let mut group = c.benchmark_group("DynamicAccumulator: Update");
-
-    for size in [10, 100, 1000, 5000].iter() {
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            let acc = setup_accumulator(size as u64);
-            let old_element = (size / 2) as i64;
-            let new_element = (size + 1) as i64;
-            b.iter(|| {
-                let mut acc_clone = acc.clone();
-                acc_clone
-                    .update(black_box(&old_element), black_box(&new_element))
-                    .unwrap();
-            });
+    let mut group = c.benchmark_group("Dynamic Accumulator Delete");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(BenchmarkId::new("delete", size), size, |b, &size| {
+            b.iter_with_setup(
+                || {
+                    let acc = setup_accumulator(size);
+                    let element_to_delete = (size as i64) / 2;
+                    (acc, element_to_delete)
+                },
+                |(mut acc, element_to_delete)| acc.delete(&element_to_delete),
+            );
         });
     }
     group.finish();
 }
 
 fn bench_prove_membership(c: &mut Criterion) {
-    let mut group = c.benchmark_group("DynamicAccumulator: Prove Membership");
+    let mut group = c.benchmark_group("Dynamic Accumulator Prove Membership");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("prove_membership", size),
+            size,
+            |b, &size| {
+                let acc = setup_accumulator(size);
+                let existing_element = (size as i64) / 2;
+                b.iter(|| acc.prove_membership(&existing_element));
+            },
+        );
+    }
+    group.finish();
+}
 
-    for size in [10, 100, 1000, 5000].iter() {
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            let acc = setup_accumulator(size as u64);
-            let element_to_prove = (size / 2) as i64;
-            b.iter(|| {
-                acc.prove_membership(black_box(&element_to_prove)).unwrap();
-            });
-        });
+fn bench_verify_membership(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Dynamic Accumulator Verify Membership");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("verify_membership", size),
+            size,
+            |b, &size| {
+                let acc = setup_accumulator(size);
+                let existing_element = (size as i64) / 2;
+                let proof = acc.prove_membership(&existing_element).unwrap();
+                b.iter(|| acc.verify_membership(&proof));
+            },
+        );
     }
     group.finish();
 }
 
 fn bench_prove_non_membership(c: &mut Criterion) {
-    let mut group = c.benchmark_group("DynamicAccumulator: Prove Non-Membership");
+    let mut group = c.benchmark_group("Dynamic Accumulator Prove Non-Membership");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("prove_non_membership", size),
+            size,
+            |b, &size| {
+                let acc = setup_accumulator(size);
+                let non_existing_element = size as i64 + 1;
+                b.iter(|| acc.prove_non_membership(&non_existing_element));
+            },
+        );
+    }
+    group.finish();
+}
 
-    // Using smaller sizes because this operation is expensive.
-    for size in [10, 50, 100, 150, 200].iter() {
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            let acc = setup_accumulator(size as u64);
-            let element_to_prove = (size + 1) as i64; // An element not in the set
+fn bench_verify_non_membership(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Dynamic Accumulator Verify Non-Membership");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("verify_non_membership", size),
+            size,
+            |b, &size| {
+                let acc = setup_accumulator(size);
+                let non_existing_element = size as i64 + 1;
+                let proof = acc.prove_non_membership(&non_existing_element).unwrap();
+                b.iter(|| acc.verify_non_membership(&proof));
+            },
+        );
+    }
+    group.finish();
+}
+
+
+fn bench_query(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Dynamic Accumulator Operations");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(BenchmarkId::new("query", size), size, |b, &size| {
+            let acc = setup_accumulator(size);
+            let existing_element = (size as i64) / 2;
+            b.iter(|| acc.query(&existing_element));
+        });
+    }
+    group.finish();
+}
+
+fn bench_prove_intersection(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Dynamic Accumulator Prove Intersection");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(BenchmarkId::new("prove_intersection", size), size, |b, &size| {
+            let acc1 = setup_accumulator(size);
+            let mut acc2 = DynamicAccumulator::new();
+            let elements: Vec<i64> = (size as i64 / 2..size as i64 + size as i64 / 2).collect();
+            acc2.add_batch(&elements).unwrap();
+            b.iter(|| acc1.prove_intersection(&acc2));
+        });
+    }
+    group.finish();
+}
+
+fn bench_verify_intersection(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Dynamic Accumulator Verify Intersection");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("verify_intersection", size),
+            size,
+            |b, &size| {
+                let acc1 = setup_accumulator(size);
+                let mut acc2 = DynamicAccumulator::new();
+                let elements: Vec<i64> =
+                    (size as i64 / 2..size as i64 + size as i64 / 2).collect();
+                acc2.add_batch(&elements).unwrap();
+                let (intersection_acc, proof) = acc1.prove_intersection(&acc2).unwrap();
+                b.iter(|| {
+                    DynamicAccumulator::verify_intersection(
+                        acc1.acc_value,
+                        acc2.acc_value,
+                        intersection_acc.acc_value,
+                        &proof,
+                    )
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_prove_union(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Dynamic Accumulator Prove Union");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(BenchmarkId::new("prove_union", size), size, |b, &size| {
+            let acc1 = setup_accumulator(size);
+            let mut acc2 = DynamicAccumulator::new();
+            let elements: Vec<i64> = (size as i64 / 2..size as i64 + size as i64 / 2).collect();
+            acc2.add_batch(&elements).unwrap();
+            b.iter(|| acc1.prove_union(&acc2));
+        });
+    }
+    group.finish();
+}
+
+fn bench_verify_union(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Dynamic Accumulator Verify Union");
+    for size in [10, 20, 50, 100].iter() {
+        group.bench_with_input(BenchmarkId::new("verify_union", size), size, |b, &size| {
+            let acc1 = setup_accumulator(size);
+            let mut acc2 = DynamicAccumulator::new();
+            let elements: Vec<i64> = (size as i64 / 2..size as i64 + size as i64 / 2).collect();
+            acc2.add_batch(&elements).unwrap();
+            let (union_acc, proof) = acc1.prove_union(&acc2).unwrap();
             b.iter(|| {
-                acc.prove_non_membership(black_box(&element_to_prove))
-                    .unwrap();
+                DynamicAccumulator::verify_union(acc1.acc_value, acc2.acc_value, union_acc.acc_value, &proof)
             });
         });
     }
     group.finish();
 }
 
+
 criterion_group!(
     benches,
     bench_add,
     bench_delete,
-    bench_update,
     bench_prove_membership,
-    bench_prove_non_membership
+    bench_verify_membership,
+    bench_prove_non_membership,
+    bench_verify_non_membership,
+    bench_query,
+    bench_prove_intersection,
+    bench_verify_intersection,
+    bench_prove_union,
+    bench_verify_union
 );
 criterion_main!(benches);
