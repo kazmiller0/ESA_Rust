@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use esa_rust::acc::dynamic_accumulator::{DynamicAccumulator, QueryResult};
+use esa_rust::acc::dynamic_accumulator::DynamicAccumulator;
 use rand::Rng;
 
 fn setup_accumulator(size: usize) -> DynamicAccumulator {

@@ -326,7 +326,7 @@ impl DynamicAccumulator {
             if !gcd.is_zero() && gcd.degree() == 0 {
                 // The equation is a_poly*Q(X) + b_poly*P(X) = gcd.
                 // We need it to be 1, so we must divide by the constant value of gcd.
-                let gcd_val = gcd.coeffs.get(0).cloned().unwrap_or_else(Fr::one);
+                let gcd_val = gcd.coeffs.first().cloned().unwrap_or_else(Fr::one);
                 let gcd_inv = gcd_val
                     .inverse()
                     .ok_or_else(|| anyhow!("Failed to compute gcd inverse"))?;
@@ -468,7 +468,7 @@ impl DynamicAccumulator {
         // Then use the identity: P1(X) = Q1(X) * P_intersect(X) and P2(X) = Q2(X) * P_intersect(X)
         
         let (q1_poly, remainder1): (DensePolynomial<Fr>, DensePolynomial<Fr>) = match DenseOrSparsePolynomial::from(&p1_poly).divide_with_q_and_r(&DenseOrSparsePolynomial::from(&p_intersect_poly)) {
-            Some((q, r)) => (q.into(), r.into()),
+            Some((q, r)) => (q, r),
             None => return Err(anyhow!("Failed to divide P1 by P_intersect")),
         };
         if !remainder1.is_zero() {
@@ -476,7 +476,7 @@ impl DynamicAccumulator {
         }
 
         let (q2_poly, remainder2): (DensePolynomial<Fr>, DensePolynomial<Fr>) = match DenseOrSparsePolynomial::from(&p2_poly).divide_with_q_and_r(&DenseOrSparsePolynomial::from(&p_intersect_poly)) {
-            Some((q, r)) => (q.into(), r.into()),
+            Some((q, r)) => (q, r),
             None => return Err(anyhow!("Failed to divide P2 by P_intersect")),
         };
         if !remainder2.is_zero() {
@@ -499,7 +499,7 @@ impl DynamicAccumulator {
         // We find A(X), B(X) such that A(X)Q1(X) + B(X)Q2(X) = 1
         if let Some((gcd, a_poly, b_poly)) = xgcd(q1_poly, q2_poly) {
             if !gcd.is_zero() && gcd.degree() == 0 {
-                let gcd_val = gcd.coeffs.get(0).cloned().unwrap_or_else(Fr::one);
+                let gcd_val = gcd.coeffs.first().cloned().unwrap_or_else(Fr::one);
                 let gcd_inv = gcd_val
                     .inverse()
                     .ok_or_else(|| anyhow!("Failed to compute gcd inverse for coprimality proof"))?;

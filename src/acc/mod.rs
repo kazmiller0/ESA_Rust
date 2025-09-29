@@ -217,9 +217,9 @@ impl Accumulator for Acc1 {
             .map(|(v, exp)| {
                 let s = *PRI_S - v;
                 let exp = [*exp as u64];
-                s.pow(&exp)
+                s.pow(exp)
             })
-            .reduce(Fr::one, |a, b| a * &b);
+            .reduce(Fr::one, |a, b| a * b);
         G1_POWER.apply(&x).into_affine()
     }
     fn cal_acc_g1_d(set: &DigestSet) -> G1Affine {
@@ -232,9 +232,9 @@ impl Accumulator for Acc1 {
             .map(|(v, exp)| {
                 let s = *PRI_S - v;
                 let exp = [*exp as u64];
-                s.pow(&exp)
+                s.pow(exp)
             })
-            .reduce(Fr::one, |a, b| a * &b);
+            .reduce(Fr::one, |a, b| a * b);
         G2_POWER.apply(&x).into_affine()
     }
     fn cal_acc_g2_d(set: &DigestSet) -> G2Affine {
@@ -297,9 +297,9 @@ impl Accumulator for Acc2 {
             .par_iter()
             .map(|(a, b)| {
                 let s = PRI_S_POWER.apply(a);
-                s * &Fr::from(*b)
+                s * Fr::from(*b)
             })
-            .reduce(Fr::zero, |a, b| a + &b);
+            .reduce(Fr::zero, |a, b| a + b);
         G1_POWER.apply(&x).into_affine()
     }
     fn cal_acc_g1_d(set: &DigestSet) -> G1Affine {
@@ -320,9 +320,9 @@ impl Accumulator for Acc2 {
             .par_iter()
             .map(|(a, b)| {
                 let s = PRI_S_POWER.apply(&(*PUB_Q - a));
-                s * &Fr::from(*b)
+                s * Fr::from(*b)
             })
-            .reduce(Fr::zero, |a, b| a + &b);
+            .reduce(Fr::zero, |a, b| a + b);
         G2_POWER.apply(&x).into_affine()
     }
     fn cal_acc_g2_d(set: &DigestSet) -> G2Affine {
@@ -330,7 +330,7 @@ impl Accumulator for Acc2 {
         let mut scalars: Vec<<Fr as PrimeField>::BigInt> = Vec::with_capacity(set.len());
         (0..set.len())
             .into_par_iter()
-            .map(|i| get_g2s(*PUB_Q - &set[i].0))
+            .map(|i| get_g2s(*PUB_Q - set[i].0))
             .collect_into_vec(&mut bases);
         (0..set.len())
             .into_par_iter()
@@ -348,7 +348,7 @@ impl Accumulator for Acc2 {
                 let set2idx = i % set2.len();
                 let (s1, q1) = set1[set1idx];
                 let (s2, q2) = set2[set2idx];
-                (*PUB_Q + &s1 - &s2, (q1 * q2) as u64)
+                (*PUB_Q + s1 - s2, (q1 * q2) as u64)
             })
             .collect_into_vec(&mut product);
         if product.par_iter().any(|(x, _)| *x == *PUB_Q) {
